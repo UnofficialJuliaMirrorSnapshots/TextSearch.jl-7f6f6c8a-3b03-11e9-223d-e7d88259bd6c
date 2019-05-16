@@ -1,73 +1,53 @@
-export EntModel, id2token
+export EntModel
 
 mutable struct EntModel <: Model
-    tokens::Dict{Symbol,SparseVectorEntry}
+    tokens::BOW
     config::TextConfig
 end
 
-function fit(::Type{EntModel}, model::DistModel, initial)
-    tokens = Dict{Symbol,SparseVectorEntry}()
+function smooth_factor(dist::AbstractVector)::Float64
+    s = sum(dist)
+    s < length(dist) ? 1.0 : 0.0
+end
+
+function fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor)
+    tokens = BOW()
     nclasses = length(model.sizes)
-    tokenID = 0
     maxent = log2(nclasses)
 
-    
-    @inbounds for (token, tokendist) in model.tokens
+    @inbounds for (token, dist) in model.tokens
+        b = smooth(dist)
         e = 0.0
-        pop = initial * nclasses + sum(tokendist.dist)
+        pop = b * nclasses + sum(dist)
 
         for j in 1:nclasses
-            pj = (tokendist.dist[j] + initial) / pop
+            pj = (dist[j] + b) / pop
 
             if pj > 0
                 e -= pj * log2(pj)
             end
         end
-        tokenID += 1
-        tokens[token] = SparseVectorEntry(tokenID, maxent - e)
+
+        tokens[token] = 1.0 - e / maxent
     end
 
     EntModel(tokens, model.config)
 end
 
-function id2token(model::EntModel)
-    m = Dict{UInt64,Symbol}()
-    for (token, term) in model.tokens
-        m[term.id] = token
+function weighted_bow(model::EntModel, weighting::Type, data, modify_bow!::Function=identity)::BOW
+    W = BOW()
+    bag, maxfreq = compute_bow(model.config, data)
+    len = 0
+    for v in values(bag)
+        len += v
     end
-
-    m
-end
-
-function vectorize(model::EntModel, data)
-    bow, maxfreq = compute_bow(model.config, data)
-    vec = Vector{SparseVectorEntry}(undef, length(bow))
-
-    i = 0
-    for (token, freq) in bow
-        if haskey(model.tokens, token)
-            i += 1
-            vec[i] = model.tokens[token]
+    bag = modify_bow!(bag)
+    for (token, freq) in bag
+        w = get(model.tokens, token, 0.0)
+        if w > 0
+            W[token] = w * freq / len
         end
     end
-
-    resize!(vec, i)
-    SparseVector(vec)
-end
-
-function weighted_bow(model::EntModel, data)
-    W = Dict{Symbol, Float64}()
-    bow, maxfreq = compute_bow(model.config, data)
-    
-    s = 0.0
-    for p in bow
-        if haskey(model.tokens, p.first)
-            i += 1
-            w = models.tokens[p.first].weight
-            W[p.first] = w
-            s += w * w
-        end
-    end
-
-    W, sqrt(s)
+  
+    W
 end
