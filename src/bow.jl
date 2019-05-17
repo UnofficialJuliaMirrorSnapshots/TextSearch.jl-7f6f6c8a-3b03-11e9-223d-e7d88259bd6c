@@ -1,9 +1,7 @@
-export TokenData, compute_bow
-
-import Base: +, *, /, ==, length, transpose
-import LinearAlgebra: dot
+import Base: +, *, /, ==, transpose, zero
+import LinearAlgebra: dot, norm
 import SimilaritySearch: normalize!, cosine_distance, angle_distance
-export BOW, compute_bow
+export BOW, compute_bow, add!
 
 # const BOW = Dict{Symbol,Int}
 const BOW = Dict{Symbol,Float64}
@@ -14,10 +12,10 @@ const BOW = Dict{Symbol,Float64}
 Computes a bag of words and the maximum frequency of the bag
 """
 function compute_bow(config::TextConfig, text::String, voc::BOW)
-    maxfreq::Int = 0
+    maxfreq = 0.0
     for token in tokenize(config, text)
         sym = Symbol(token)
-        m = floor(Int, get(voc, sym, 0.0)) + 1
+        m = get(voc, sym, 0.0) + 1.0
         voc[sym] = m
         maxfreq = max(m, maxfreq)
     end
@@ -25,6 +23,26 @@ function compute_bow(config::TextConfig, text::String, voc::BOW)
     voc, maxfreq
 end
 
+"""
+    compute_bow(tokenlist::AbstractVector{Symbol}, voc::BOW)::Tuple{BOW,Float64}
+
+Updates a BOW using the given list of tokens
+"""
+function compute_bow(tokenlist::AbstractVector{Symbol}, voc::BOW)
+    maxfreq = 0.0
+    for sym in tokenlist
+        m = get(voc, sym, 0.0) + 1.0
+        voc[sym] = m
+        maxfreq = max(m, maxfreq)
+    end
+
+    voc, maxfreq
+end
+
+# these are needed to call `compute_bow` for symbol's list but also for simplicity of the API
+compute_bow(tokenlist::AbstractVector{Symbol}) = compute_bow(tokenlist, BOW())
+compute_bow(config::TextConfig, tokenlist::AbstractVector{Symbol}, bow::BOW) = compute_bow(tokenlist, bow)
+compute_bow(config::TextConfig, tokenlist::AbstractVector{Symbol}) = compute_bow(tokenlist, BOW())
 
 """
     compute_bow(config::TextConfig, text::String)
@@ -40,7 +58,7 @@ Computes a bag of word and the maximum frequency of the bag; the input is an arr
 """
 function compute_bow(config::TextConfig, arr::AbstractVector{String})
     D = BOW()
-    maxfreq::Int = 0
+    maxfreq = 0.0
     for text in arr
        _, maxfreq = compute_bow(config, text, D)
     end
@@ -54,19 +72,13 @@ end
 Inplace normalization of `bow`
 """
 function normalize!(bow::BOW)
-    s = 0.0
-    for w in values(bow)
-        s += w * w
-    end
-
-    s = 1.0 / sqrt(s)
+    s = 1.0 / norm(bow)
     for (k, v) in bow
         bow[k] = v * s
     end
 
     bow
 end
-
 
 function normalize!(matrix::AbstractVector{BOW})
     for bow in matrix
@@ -88,20 +100,55 @@ function dot(a::BOW, b::BOW)
     s
 end
 
+function norm(a::BOW)::Float64
+    s = 0.0
+    for w in values(a)
+        s += w * w
+    end
+
+    sqrt(s)
+end
+
+function zero(::Type{BOW})
+    BOW()
+end
+
+function add!(a::BOW, b::BOW)
+    for (k, w) in b
+        if w != 0.0
+            a[k] = get(a, k, 0.0) + w
+        end
+    end
+
+    a
+end
+
 function +(a::BOW, b::BOW)
     if length(a) < length(b) 
         a, b = b, a  # a must be the largest bow
     end
     
     c = copy(a)
-    for k in keys(b)
-        w = get(b, k, 0.0)
+    for (k, w) in b
         if w != 0.0
-            c[k] += b[k]
+            c[k] = get(c, k, 0.0) + w 
         end
     end
 
     c
+end
+
+function +(a::BOW, b::F) where F <: Real
+    c = copy(a)
+    for (k, v) in a
+        c[k] = v + b
+    end
+
+    c
+end
+
+function +(b::F, a::BOW) where F <: Real
+    a + b
 end
 
 function *(a::BOW, b::BOW)
@@ -142,20 +189,6 @@ function /(a::BOW, b::F) where F <: Real
     end
 
     c
-end
-
-
-function +(a::BOW, b::F) where F <: Real
-    c = copy(a)
-    for (k, v) in a
-        c[k] = v + b
-    end
-
-    c
-end
-
-function +(b::F, a::BOW) where F <: Real
-    a + b
 end
 
 """
