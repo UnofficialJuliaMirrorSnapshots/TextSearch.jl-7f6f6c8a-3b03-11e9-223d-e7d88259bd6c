@@ -1,5 +1,5 @@
 import SimilaritySearch: fit
-export VectorModel, fit, weighted_bow, TfidfModel, TfModel, IdfModel, FreqModel
+export VectorModel, fit, vectorize, TfidfModel, TfModel, IdfModel, FreqModel
 
 """
     abstract type Model
@@ -15,20 +15,17 @@ Models a text through a vector space
 """
 mutable struct VectorModel <: Model
     config::TextConfig
-    vocab::BOW
+    tokens::BOW
     maxfreq::Int
     n::Int
 end
 
-
 """
-    fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector; lower=0, higher=1.0)
+    fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector)
 
-Trains a vector model using the text preprocessing configuration `config` and the input corpus. It also allows for filtering
-tokens with low and high number of occurrences. `lower` is specified as an integer and `higher` as a proportion between
-the frequency of the current token and the maximum frequency of the model.
+Trains a vector model using the text preprocessing configuration `config` and the input corpus. 
 """
-function fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector; lower=0, higher=1.0)
+function fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector)
     voc = BOW()
     n = 0
     maxfreq = 0.0
@@ -42,33 +39,26 @@ function fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector; lo
     end
 
     println(stderr, "finished VectorModel: $n processed items")
-    if lower != 0 || higher != 1.0
-        voc, maxfreq = filter_vocab(voc, maxfreq, lower, higher)
-    end
-
     VectorModel(config, voc, Int(maxfreq), n)
 end
 
 """
-    filter_vocab(vocab, maxfreq, lower::int, higher::Float64=1.0)
+    prune(model::VectorModel, minfreq, rank=1.0)
 
-Drops terms in the vocabulary with less than `low` and and higher than `high` frequences.
-- `lower` is specified as an integer, and must be read as the lower accepted frequency (lower frequencies will be dropped)
-- `higher` is specified as a float, 0 < higher <= 1.0; it is readed as the higher frequency that is preserved (it a proportion of the maximum frequency)
-
+Cuts the vocabulary by frequency using lower and higher filter;
+All tokens with frequency below `freq` are ignored; also, all tokens
+with rank lesser than `rank` (top frequencies) are ignored. 
 """
-function filter_vocab(vocab::BOW, maxfreq, lower::Int, higher::Float64=1.0)
-    X = BOW()
-
-    for (t, freq) in vocab
-        if freq < lower || freq > maxfreq * higher
-            continue
-        end
-
-        X[t] = freq
+function prune(model::VectorModel, freq::Int, rank::Int)
+    # _weight(IdfModel, )
+    W = [token => f for (token, f) in model.tokens if f >= freq]
+    sort!(W, by=x->x[2])
+    M = BOW()
+    for i in 1:length(W)-rank+1
+        w = W[i]
+        M[w[1]] = w[2]
     end
-
-    X, floor(Int, maxfreq * higher)
+    VectorModel(model.config, M, model.maxfreq, model.n)
 end
 
 """
@@ -78,7 +68,7 @@ Updates `a` with `b` inplace; returns `a`.
 """
 function update!(a::VectorModel, b::VectorModel)
     i = 0
-    for (k, freq1) in b.vocab
+    for (k, freq1) in b.tokens
         i += 1
         freq2 = get(a, k, 0.0)
         if freq1 == 0.0
@@ -99,24 +89,30 @@ abstract type IdfModel end
 abstract type FreqModel end
 
 """
-    weighted_bow(model::VectorModel, weighting::Type, data, modify_bow!::Function=identity)::Dict{Symbol, Float64}
+    vectorize(model::VectorModel, weighting::Type, data, modify_bow!::Function=identity)::Dict{Symbol, Float64}
 
 Computes `data`'s weighted bag of words using the given model and weighting scheme.
 It takes a function `modify_bow!` to modify the bag
 before applying the weighting scheme; `modify_bow!` defaults to `identity`.
 """
-function weighted_bow(model::VectorModel, weighting::Type, data, modify_bow!::Function=identity)::BOW
+function vectorize(model::VectorModel, weighting::Type, data, modify_bow!::Function=identity)::BOW
     W = BOW()
     bag, maxfreq = compute_bow(model.config, data)
     bag = modify_bow!(bag)
     for (token, freq) in bag
-        global_freq = get(model.vocab, token, 0.0)
+        global_freq = get(model.tokens, token, 0.0)
         if global_freq > 0.0
             W[token] = _weight(weighting, freq, maxfreq, model.n, global_freq)
         end
     end
   
     W
+end
+
+vectorize(model::VectorModel, data, modify_bow!::Function=identity) = vectorize(model, TfidfModel, data, modify_bow!)
+
+function broadcastable(model::VectorModel)
+    (model,)
 end
 
 """
