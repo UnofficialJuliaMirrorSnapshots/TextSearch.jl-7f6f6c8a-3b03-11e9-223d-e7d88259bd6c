@@ -19,6 +19,7 @@ const RE_URL = r"(http|ftp|https)://\S+"
 const RE_NUM = r"\d+"
 const BLANK = ' '
 const PUNCTUACTION_BLANK = string(PUNCTUACTION, BLANK)
+const EMOJIS = Set([l[1] for l in readlines(joinpath(@__DIR__, "emojis.txt"))])
 
 # SKIP_WORDS = set(["…", "..", "...", "...."])
 
@@ -29,6 +30,7 @@ mutable struct TextConfig
     group_num::Bool
     group_url::Bool
     group_usr::Bool
+    group_emo::Bool
     lc::Bool
     qlist::Vector{Int}
     nlist::Vector{Int}
@@ -44,12 +46,13 @@ mutable struct TextConfig
         group_num=true,
         group_url=true,
         group_usr=false,
+        group_emo=false,
         lc=true,
         qlist=Int[],
         nlist=Int[1],
         slist=Tuple{Int,Int}[]
     )
-        new(del_diac, del_dup, del_punc, group_num, group_url, group_usr, lc,
+        new(del_diac, del_dup, del_punc, group_num, group_url, group_usr, group_emo, lc,
             qlist, nlist, slist)
     end
 end
@@ -95,6 +98,17 @@ function normalize_text(config::TextConfig, text::String)::Vector{Char}
             continue
         end
 
+        if u in EMOJIS
+            if prev != BLANK
+                push!(L, BLANK)
+            end
+            if config.group_emo
+                push!(L, '_');push!(L, 'e');push!(L, 'm');push!(L, 'o')
+                prev = u
+                continue
+            end
+        end
+
         prev = u
         push!(L, u)
     end
@@ -112,9 +126,9 @@ Pushes a word into token list after applying the `normalize` function; it discar
 """
 function push_word!(config::TextConfig, output::Vector{Symbol}, token::Vector{UInt8}, normalize::Function)
     if length(token) > 0
-        t = normalize(String(token))::String
+        t = normalize(String(token))
 
-        if length(t) > 0
+        if t isa AbstractString && length(t) > 0
             push!(output, Symbol(t))
         end
     end
@@ -134,11 +148,13 @@ function tokenize_words(config::TextConfig, text::Vector{Char}, normalize::Funct
         if c == BLANK
             push_word!(config, L, take!(buff), normalize)
         elseif i > 1
-            if text[i-1] in PUNCTUACTION && !(c in PUNCTUACTION)
+            if text[i-1] in PUNCTUACTION && !(c in PUNCTUACTION) 
+                # flushing from punctuaction to non punctuaction.e
                 push_word!(config, L, take!(buff), normalize)
                 write(buff, c)
                 continue
             elseif !(text[i-1] in PUNCTUACTION_BLANK) && c in PUNCTUACTION
+                # flushing from neither punctuaction nor blank to some punctuaction symbol
                 push_word!(config, L, take!(buff), normalize)
                 write(buff, c)
                 continue
@@ -160,7 +176,7 @@ end
 
 Tokenizes an array of strings
 """
-function tokenize(config::TextConfig, arr::AbstractVector, normalize::Function=identity)::Vector{Symbol}
+function tokenize(config::TextConfig, arr::AbstractVector{S}, normalize::Function=identity)::Vector{Symbol} where S <: AbstractString
     L = Symbol[]
     n = length(arr)
     sizehint!(L, (length(config.nlist) + length(config.slist)) * (div(n, 2) + 1) + length(config.qlist) * n)
