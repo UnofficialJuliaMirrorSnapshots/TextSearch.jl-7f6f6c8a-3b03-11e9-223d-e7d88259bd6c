@@ -4,6 +4,7 @@ mutable struct DistModel <: Model
     tokens::Dict{Symbol, Vector{Float64}}
     config::TextConfig
     sizes::Vector{Int}
+    initial_dist::Vector{Float64}
 end
 
 const EMPTY_TOKEN_DIST = Int[]
@@ -19,27 +20,28 @@ and its associated labels `y`. Optional parameters:
    - the keyword :balance` that indicates that `weights` must try to compensate the unbalance among classes
    - nothing: let the computed histogram untouched
 - `fix`: if true, it stores the empirical probabilities instead of frequencies
-
 """
-function fit(::Type{DistModel}, config::TextConfig, corpus, y; nclasses=0, weights=nothing, fix=true)
+function fit(::Type{DistModel}, config::TextConfig, corpus, y; nclasses=0, weights=nothing, fix=false, smooth::Float64=0.0)
     if nclasses == 0
         nclasses = unique(y) |> length
     end
     
-    model = DistModel(Dict{Symbol, Vector{Float64}}(), config, zeros(Int, nclasses))
+    model = DistModel(Dict{Symbol, Vector{Float64}}(), config, zeros(Int, nclasses), fill(smooth, nclasses))
     feed!(model, corpus, y)
     if weights == :balance
         s = sum(model.sizes)
         weights = [s / x  for x in model.sizes]
     end
 
-    if !isnothing(weights)
+    if weights !== nothing
         normalize!(model, weights)
     end
 
     if fix
         fix!(model)
     end
+
+    model
 end
 
 """
@@ -56,7 +58,7 @@ function feed!(model::DistModel, corpus, y)
         for token in tokenize(config, text)
             token_dist = get(model.tokens, token, EMPTY_TOKEN_DIST)
             if length(token_dist) == 0
-                token_dist = zeros(Float64, nclasses)
+                token_dist = copy(model.initial_dist)
                 model.tokens[token] = token_dist
             end
             token_dist[klass] += 1

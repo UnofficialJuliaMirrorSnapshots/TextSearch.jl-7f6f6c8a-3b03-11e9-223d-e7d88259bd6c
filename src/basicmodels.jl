@@ -1,4 +1,4 @@
-export VectorModel, fit, vectorize, TfidfModel, TfModel, IdfModel, FreqModel
+export VectorModel, fit, vectorize, TfidfModel, TfModel, IdfModel, FreqModel, prune, prune_select_top
 
 """
     abstract type Model
@@ -6,6 +6,11 @@ export VectorModel, fit, vectorize, TfidfModel, TfModel, IdfModel, FreqModel
 An abstract type that represents a weighting model
 """
 abstract type Model end
+
+abstract type TfidfModel end
+abstract type TfModel end
+abstract type IdfModel end
+abstract type FreqModel end
 
 """
     mutable struct VectorModel
@@ -43,14 +48,12 @@ function fit(::Type{VectorModel}, config::TextConfig, corpus::AbstractVector)
 end
 
 """
-    prune(model::VectorModel, minfreq, rank=1.0)
+    prune(model::VectorModel, minfreq, rank)
 
 Cuts the vocabulary by frequency using lower and higher filter;
-All tokens with frequency below `freq` are ignored; also, all tokens
-with rank lesser than `rank` (top frequencies) are ignored. 
+All tokens with frequency below `freq` are ignored; top `rank` tokens are also removed.
 """
-function prune(model::VectorModel, freq::Int, rank::Int)
-    # _weight(IdfModel, )
+function prune(model::VectorModel, freq::Integer, rank::Integer)
     W = [token => f for (token, f) in model.tokens if f >= freq]
     sort!(W, by=x->x[2])
     M = BOW()
@@ -61,6 +64,40 @@ function prune(model::VectorModel, freq::Int, rank::Int)
 
     VectorModel(model.config, M, model.maxfreq, model.n)
 end
+
+"""
+    prune_select_top(model::VectorModel, k::Integer, kind::Type{T}=IdfModel)
+    prune_select_top(model::VectorModel, ratio::AbstractFloat, kind::Type{T}=IdfModel)
+
+Creates a new model with the best `k` tokens from `model` based on the `kind` scheme; kind must be either `IdfModel` or `FreqModel`.
+`ratio` is a floating point between 0 and 1 indicating the ratio of the vocabulary to be kept
+"""
+function prune_select_top(model::VectorModel, k::Integer, kind::Type{T}=IdfModel) where T <: Union{IdfModel,FreqModel}
+    tokens = BOW()
+    maxfreq = 0
+    if kind == IdfModel
+        X = [(t, freq, _weight(kind, 0, 0, model.n, freq)) for (t, freq) in model.tokens]
+        sort!(X, by=x->x[end], rev=true)
+        for i in 1:k
+            t, freq, w = X[i]
+            tokens[t] = freq
+            maxfreq = max(maxfreq, freq)
+        end
+
+    else kind == FreqModel
+        X = [(t, freq) for (t, freq) in model.tokens]
+        sort!(X, by=x->x[end], rev=true)
+        for i in 1:k
+            t, freq = X[i]
+            tokens[t] = freq
+            maxfreq = max(maxfreq, freq)
+        end
+    end
+
+    VectorModel(model.config, tokens, maxfreq, model.n)
+end
+
+prune_select_top(model::VectorModel, ratio::AbstractFloat, kind=IdfModel) = prune_select_top(model, floor(Int, length(model.tokens) * ratio), kind)
 
 """
     update!(a::VectorModel, b::VectorModel)
@@ -84,10 +121,6 @@ function update!(a::VectorModel, b::VectorModel)
     a
 end
 
-abstract type TfidfModel end
-abstract type TfModel end
-abstract type IdfModel end
-abstract type FreqModel end
 
 """
     vectorize(model::VectorModel, weighting::Type, data; normalize=true)::Dict{Symbol, Float64}

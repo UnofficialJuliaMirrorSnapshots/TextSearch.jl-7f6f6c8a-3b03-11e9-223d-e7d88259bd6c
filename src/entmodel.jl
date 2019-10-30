@@ -1,4 +1,4 @@
-export EntModel
+export EntModel, EntTfModel, EntTpModel
 
 mutable struct EntModel <: Model
     tokens::BOW
@@ -11,13 +11,14 @@ function smooth_factor(dist::AbstractVector)::Float64
 end
 
 """
-    fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor; lower=0.001)
+    fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor; lower=0.001, normalize_words::Function=identity)
 
 
 Fits an EntModel using the already fitted DistModel; the `smooth` function is called to compute the smoothing factor
 for a given histogram. It accepts only symbols with a final weight higher or equal than `lower`.
+
 """
-function fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor; lower=0.001)
+function fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor; lower=0.0001)
     tokens = BOW()
     nclasses = length(model.sizes)
     maxent = log2(nclasses)
@@ -34,6 +35,7 @@ function fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor;
                 e -= pj * log2(pj)
             end
         end
+
         e = 1.0 - e / maxent
         if e >= lower
             tokens[token] = e
@@ -43,8 +45,8 @@ function fit(::Type{EntModel}, model::DistModel, smooth::Function=smooth_factor;
     EntModel(tokens, model.config)
 end
 
-function fit(::Type{EntModel}, config::TextConfig, corpus, y; nclasses=0, weights=:balance, smooth=smooth_factor, lower=0.001)
-    dmodel = fit(DistModel, config, corpus, y, nclasses=nclasses, weights=weights)
+function fit(::Type{EntModel}, config::TextConfig, corpus, y; nclasses=0, weights=:balance, smooth=smooth_factor, lower=0.0001)
+    dmodel = fit(DistModel, config, corpus, y, nclasses=nclasses, weights=weights, fix=false)
     fit(EntModel, dmodel, smooth, lower=lower)
 end
 
@@ -54,7 +56,7 @@ end
 Prunes the model accepting only those symbols with a weight higher than `lower`
 
 """
-function prune(model::EntModel, lower)
+function prune(model::EntModel, lower::Float64)
     tokens = BOW()
     for (t, ent) in model.tokens
         if ent >= lower
@@ -64,6 +66,26 @@ function prune(model::EntModel, lower)
     
     EntModel(tokens, model.config)
 end
+
+"""
+    prune_select_top(model::EntModel, k::Int)
+    prune_select_top(model::EntModel, ratio::AbstractFloat)
+
+Creates a new model preserving only the best `k` terms on `model`; the size can be indicated by the ratio of the database to be kept, i.e., ``0 < ratio < 1``.
+"""
+function prune_select_top(model::EntModel, k::Int)
+    X = sort!(collect(model.tokens), by=x->x[2], rev=true)
+    
+    tokens = BOW()
+    for i in 1:k
+        t, ent = X[i]
+        tokens[t] = ent
+    end
+
+    EntModel(tokens, model.config)
+end
+
+prune_select_top(model::EntModel, ratio::AbstractFloat) = prune_select_top(model, floor(Int, length(model.tokens) * ratio))
 
 abstract type EntTfModel end
 abstract type EntTpModel end
