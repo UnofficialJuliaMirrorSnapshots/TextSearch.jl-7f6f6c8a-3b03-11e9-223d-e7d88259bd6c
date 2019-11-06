@@ -1,10 +1,14 @@
 export DistModel, feed!, fix!
 
+const DistVocabulary = Dict{Symbol, Vector{Float64}}
+
 mutable struct DistModel <: Model
-    tokens::Dict{Symbol, Vector{Float64}}
     config::TextConfig
+    tokens::DistVocabulary
     sizes::Vector{Int}
     initial_dist::Vector{Float64}
+    m::Int
+    n::Int
 end
 
 const EMPTY_TOKEN_DIST = Int[]
@@ -21,12 +25,13 @@ and its associated labels `y`. Optional parameters:
    - nothing: let the computed histogram untouched
 - `fix`: if true, it stores the empirical probabilities instead of frequencies
 """
-function fit(::Type{DistModel}, config::TextConfig, corpus, y; nclasses=0, weights=nothing, fix=false, smooth::Float64=0.0)
+function fit(::Type{DistModel}, config::TextConfig, corpus, y; nclasses=0, weights=:balance, fix=false, smooth::Real=0)
     if nclasses == 0
         nclasses = unique(y) |> length
     end
-    
-    model = DistModel(Dict{Symbol, Vector{Float64}}(), config, zeros(Int, nclasses), fill(smooth, nclasses))
+    smooth = fill(convert(Float64, smooth), nclasses)
+    counters = zeros(Int, nclasses)
+    model = DistModel(config, DistVocabulary(), counters, smooth, 0, 0)
     feed!(model, corpus, y)
     if weights == :balance
         s = sum(model.sizes)
@@ -52,8 +57,7 @@ DistModel objects support for incremental feed if `fix!` method is not called on
 function feed!(model::DistModel, corpus, y)
     config = model.config
     nclasses = length(model.sizes)
-    n = 0
-    println(stderr, "feeding DistModel with $(length(corpus)) items, classes: $(nclasses)")
+
     for (klass, text) in zip(y, corpus)
         for token in tokenize(config, text)
             token_dist = get(model.tokens, token, EMPTY_TOKEN_DIST)
@@ -65,12 +69,10 @@ function feed!(model::DistModel, corpus, y)
         end
 
         model.sizes[klass] += 1
-        n += 1
-        n % 1000 == 0 && print(stderr, "*")
-        n % 100000 == 0 && println(stderr, " dist: $(model.sizes), adv: $n")
     end
-    println(stderr, "finished DistModel: $n processed items")
-
+    
+    model.n += length(corpus)
+    model.m = length(model.tokens)
     model
 end
 

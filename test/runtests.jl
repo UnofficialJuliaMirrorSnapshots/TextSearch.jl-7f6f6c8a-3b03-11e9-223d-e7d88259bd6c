@@ -1,9 +1,7 @@
 # using Languages
-using Test
-using SimilaritySearch
-using TextSearch
-using LinearAlgebra
-fit = TextSearch.fit
+using SimilaritySearch, TextSearch
+using Test, SparseArrays, LinearAlgebra, StatsBase
+const fit = TextSearch.fit
 
 const text0 = "@user;) #jello.world"
 const text1 = "hello world!! @user;) #jello.world :)"
@@ -45,7 +43,7 @@ end
     @test sort(a) == sort(b)
 end
 
-@testset "Tokenizer, BOW, and vectorize" begin # test_vmodel
+@testset "Tokenizer, DVEC, and vectorize" begin # test_vmodel
     config = TextConfig()
     config.nlist = [1]
     config.qlist = []
@@ -54,11 +52,13 @@ end
 
     @test tokenize(config, text1) == [Symbol(h) for h in ["hello", "world", "!!",  "@user", ";)", "#jello", ".", "world", ":)"]]
     model = fit(VectorModel, config, corpus)
-    @test length(vectorize(model, TfModel, text1)) == 8
-    @test length(vectorize(model, TfModel, text2)) == 0
+    x = vectorize(model, TfModel, text1)
+    @test nnz(x) == 8
+    x = vectorize(model, TfModel, text2)
+    @test nnz(x) == 0
 end
 
-
+    
 const labeled_corpus = [("me gusta", 1), ("me encanta", 1), ("lo odio", 2), ("odio esto", 2), ("me encanta esto LOL!", 1)]
 const sentiment_text = "lol, esto me encanta"
 
@@ -74,44 +74,18 @@ const sentiment_text = "lol, esto me encanta"
 
 end
 
-@testset "DistModel-normalize! tests" begin
-    config = TextConfig()
-    config.nlist = [1]
-    X = [x[1] for x in labeled_corpus]
-    y = [x[2] for x in labeled_corpus]
-    dmodel = fit(DistModel, config, X, y, weights=:balance)
-    #dmap = id2token(dmodel)
-    #@show sentiment_text
-    #@show dmodel
-    #d1 = [(dmap[t.id], t.weight) for t in vectorize(dmodel, sentiment_text).tokens]
-    #d2 = [(:me1, 1.0), (:me2, 0.0), (:encanta1, 1.0), (:encanta2, 0.0), (:esto1, 0.4), (:esto2, 0.6), (:lol1, 1.0), (:lol2, 0.0)]
-    #@test string(d1) == string(d2)
-end
-
 @testset "EntModel tests" begin
     config = TextConfig()
     config.nlist = [1]
     X = [x[1] for x in labeled_corpus]
     y = [x[2] for x in labeled_corpus]
-    dmodel = fit(DistModel, config, X, y, weights=:balance)
+    dmodel = fit(DistModel, config, X, y, weights=:balance, smooth=1)
     emodel = fit(EntModel, dmodel)
-    emodel_ = fit(EntModel, config, X, y)
+    emodel_ = fit(EntModel, config, X, y, weights=:balance, smooth=1)
     a = vectorize(emodel, X)
     b = vectorize(emodel_, X)
-    @show a b
     @test 0.999 < dot(a, b)
- 
-    # a = [(emap[t.id], t.weight) for t in .tokens]
-    # b = [(:esto,0.0290494),(:encanta,1.0),(:me,1.0),(:lol,1.0)]
-    # sort!(a)
-    # sort!(b)
-    # @test string(a) == string(b)
-
-    # @show [(maptoken[term.id], term.id, term.weight) for term in vectorize(sentiment_text, emodel).terms]
-    # @show vectorize(text4, vmodel)
-end
-#@test
-# @test TextConfig()
+ end
 
 
 @testset "distances" begin
@@ -165,32 +139,26 @@ _corpus = [
     config.qlist = []
     config.slist = []
     model = fit(VectorModel, config, _corpus)
-    @show _corpus
     X = [vectorize(model, FreqModel, x) for x in _corpus]
     dX = transpose(X)
 end
 
-
 @testset "invindex" begin
     config = TextConfig()
-    config.qlist = [3, 4]
-    config.nlist = [1, 2, 3]
+    #config.qlist = [3, 4]
+    #config.nlist = [1, 2, 3]
+    config.nlist = [1]
 
     model = fit(VectorModel, config, _corpus)
-    invindex = InvIndex()
-    for c in _corpus
-        push!(invindex, invindex.n + 1, vectorize(model, TfidfModel, c))
-    end
-
+    invindex = fit(InvIndex, [vectorize(model, TfidfModel, text) for text in _corpus])
     q = vectorize(model, TfidfModel, "la casa roja")
     res = search(invindex, cosine_distance, q, KnnResult(4))
     ires = [r.objID for r in res]
-    @show res, _corpus[ires]
-    @test ires == [1, 2, 4, 3]
+    @test sort(ires) == [1, 2, 3, 4]
     shortindex = prune(invindex, 3)
+    @show shortindex
     res = search(shortindex, cosine_distance, q, KnnResult(4))
     ires = [r.objID for r in res]
-    @show res, _corpus[ires]
     @test sort(ires) == [1, 2, 3, 4]
 end
 
@@ -200,10 +168,11 @@ end
     config.qlist = []
     config.slist = []
     model = fit(VectorModel, config, _corpus)
-    @show _corpus
     X = [vectorize(model, FreqModel, x) for x in _corpus]
     x = sum(X) |> normalize!
-    @test 0.999 < dot(x, Dict(:la=>0.736665,:verde=>0.39922,:azul=>0.112482,:pera=>0.087128,:esta=>0.174256,:roja=>0.224964,:hoja=>0.112482,:casa=>0.337445,:rica=>0.174256,:manzana=>0.19961))
+    vec = bow(model, x)
+    expected = Dict(:la => 0.7366651330405098,:verde => 0.39921969741172364,:azul => 0.11248181187626208,:pera => 0.08712803682959973,:esta => 0.17425607365919946,:roja => 0.22496362375252416,:hoja => 0.11248181187626208,:casa => 0.33744543562878626,:rica => 0.17425607365919946,:manzana => 0.19960984870586182)
+    @test 0.999 < dot(vec, expected)
 end
 
 
@@ -218,7 +187,6 @@ end
     X = [vectorize(model, TfidfModel, x) for x in corpus]
     y = [x[2] for x in labeled_corpus]
     rocchio = fit(Rocchio, X, y)
-    @show rocchio.protos rocchio.pops
     @test sum(predict.(rocchio, X) .== y)/length(y) == 1.0
 
     for p in transform.(rocchio, X)
@@ -241,9 +209,7 @@ end
         println("===>", p)
     end
 
-    #@show rocchio.protos rocchio.pops
-    @show predict.(rocchio, X)
-    @show y
+    @test mean(predict.(rocchio, X) .== y) > 0.5
 end
 
 
